@@ -1,28 +1,40 @@
-import React, { useState } from 'react';
-import { useKeycloak } from '@react-keycloak/web';
+import React, { useState, useEffect } from 'react';
 
 const ReportPage: React.FC = () => {
-  const { keycloak, initialized } = useKeycloak();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [authenticated, setAuthenticated] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    // Проверяем, авторизован ли пользователь, обратившись к защищённому ресурсу
+    fetch('http://localhost:5000/api/reports', { credentials: 'include' })
+      .then(res => {
+        if (res.ok) setAuthenticated(true);
+        else if (res.status === 401) setAuthenticated(false);
+      })
+      .catch(() => setAuthenticated(false));
+  }, []);
 
   const downloadReport = async () => {
-    if (!keycloak?.token) {
-      setError('Not authenticated');
-      return;
-    }
-
     try {
       setLoading(true);
       setError(null);
-
-      const response = await fetch(`${process.env.REACT_APP_API_URL}/reports`, {
-        headers: {
-          'Authorization': `Bearer ${keycloak.token}`
-        }
+      const response = await fetch('http://localhost:5000/api/reports', {
+        credentials: 'include'
       });
-
-      
+      if (!response.ok) {
+        const message = await response.text();
+        throw new Error(message || 'Failed to download report');
+      }
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = 'reporting_customer_telemetry.csv';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'An error occurred');
     } finally {
@@ -30,15 +42,12 @@ const ReportPage: React.FC = () => {
     }
   };
 
-  if (!initialized) {
-    return <div>Loading...</div>;
-  }
-
-  if (!keycloak.authenticated) {
+  if (authenticated === null) return <div>Loading...</div>;
+  if (!authenticated) {
     return (
       <div className="flex flex-col items-center justify-center min-h-screen bg-gray-100">
         <button
-          onClick={() => keycloak.login()}
+          onClick={() => window.location.href = 'http://localhost:5001/auth/login'}
           className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600"
         >
           Login
@@ -51,7 +60,6 @@ const ReportPage: React.FC = () => {
     <div className="flex flex-col items-center justify-center min-h-screen bg-gray-100">
       <div className="p-8 bg-white rounded-lg shadow-md">
         <h1 className="text-2xl font-bold mb-6">Usage Reports</h1>
-        
         <button
           onClick={downloadReport}
           disabled={loading}
@@ -61,7 +69,6 @@ const ReportPage: React.FC = () => {
         >
           {loading ? 'Generating Report...' : 'Download Report'}
         </button>
-
         {error && (
           <div className="mt-4 p-4 bg-red-100 text-red-700 rounded">
             {error}
