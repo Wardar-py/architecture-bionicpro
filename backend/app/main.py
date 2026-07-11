@@ -67,14 +67,17 @@ except Exception:
 def get_ch_client():
     return CHClient(host='olap_db', user='demo', password='demo', database='default')
 
+# Витрина отчётности. По умолчанию — витрина на базе CDC + MaterializedView (задание 4).
+REPORT_TABLE = os.getenv("REPORT_TABLE", "report_customer_telemetry_cdc")
+
 def generate_report_data(user_id: int, from_date: str, to_date: str) -> str:
     """Генерирует CSV-отчёт и возвращает его содержимое как строку."""
     ch = get_ch_client()
-    query = """
+    query = f"""
     SELECT date, user_id, full_name, email, prosthesis_model,
            total_actions, avg_response_time_ms, max_response_time_ms,
            min_response_time_ms, usage_duration_sec
-    FROM report_customer_telemetry
+    FROM {REPORT_TABLE}
     WHERE user_id = %(user_id)s AND date BETWEEN %(from_date)s AND %(to_date)s
     ORDER BY date
     """
@@ -100,9 +103,15 @@ async def get_report(
     to_date: Optional[str] = None,
     user: dict = Depends(get_current_user)
 ):
-    user_id = int(user.get("sub"))
-    if not user_id:
-        raise HTTPException(status_code=400, detail="Invalid user")
+    # user_id приходит отдельным числовым claim из Keycloak (маппер user_id),
+    # т.к. sub — это UUID и не совпадает с идентификатором в CRM/OLAP
+    raw_user_id = user.get("user_id")
+    if raw_user_id is None:
+        raise HTTPException(status_code=403, detail="Token has no user_id claim")
+    try:
+        user_id = int(raw_user_id)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="Invalid user_id claim")
 
     # Установка периода по умолчанию (последние 30 дней)
     if not from_date and not to_date:
@@ -138,11 +147,10 @@ async def get_report(
             ContentType='text/csv'
         )
 
-    # Генерируем presigned URL на скачивание (через CDN, но мы будем использовать прямой URL MinIO, а перед ним Nginx)
-    # Но лучше сгенерировать URL, указывающий на наш Nginx, который проксирует MinIO.
-    # Предположим, что Nginx доступен на http://localhost:8081/reports/...
+    # Ссылка на CDN (Nginx), который проксирует MinIO с кешированием.
+    # Путь включает имя бакета: /<bucket>/<key>.
     cdn_base_url = os.getenv("CDN_BASE_URL", "http://localhost:8081")
-    file_url = f"{cdn_base_url}/{s3_key}"
+    file_url = f"{cdn_base_url}/{MINIO_BUCKET}/{s3_key}"
 
-    # Возвращаем ссылку для скачивания (редирект)
+    # Возвращаем ссылку для скачивания (редирект на CDN)
     return RedirectResponse(url=file_url)

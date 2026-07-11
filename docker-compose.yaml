@@ -1,27 +1,27 @@
-#x-airflow-common: &airflow-common
-#  build:
-#    context: ./airflow
-#    dockerfile: Dockerfile
-#  environment: &airflow-env
-#    AIRFLOW__CORE__EXECUTOR: LocalExecutor
-#    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow-db:5432/airflow
-#    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "False"
-#    AIRFLOW__CORE__LOAD_EXAMPLES: "False"
-#    AIRFLOW__CORE__FERNET_KEY: gkJWY0wuyY69o5xpmTk4Wc5Qo0mRQ0ZX5GDkzJHVGuM=
-#    AIRFLOW__API__AUTH_BACKENDS: airflow.api.auth.backend.basic_auth,airflow.api.auth.backend.session
-#
-#    _AIRFLOW_WWW_USER_USERNAME: admin
-#    _AIRFLOW_WWW_USER_PASSWORD: admin
-#    _AIRFLOW_WWW_USER_FIRSTNAME: Air
-#    _AIRFLOW_WWW_USER_LASTNAME: Flow
-#    _AIRFLOW_WWW_USER_ROLE: Admin
-#    _AIRFLOW_WWW_USER_EMAIL: admin@example.com
-#  volumes:
-#    - ./airflow/dags:/opt/airflow/dags
-#    - airflow_logs:/opt/airflow/logs
-#    - ./airflow/plugins:/opt/airflow/plugins
-#    - ./airflow/scripts:/opt/airflow/scripts:ro
-#  user: "${AIRFLOW_UID:-50000}:0"
+x-airflow-common: &airflow-common
+  build:
+    context: ./airflow
+    dockerfile: Dockerfile
+  environment: &airflow-env
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow-db:5432/airflow
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "False"
+    AIRFLOW__CORE__LOAD_EXAMPLES: "False"
+    AIRFLOW__CORE__FERNET_KEY: gkJWY0wuyY69o5xpmTk4Wc5Qo0mRQ0ZX5GDkzJHVGuM=
+    AIRFLOW__API__AUTH_BACKENDS: airflow.api.auth.backend.basic_auth,airflow.api.auth.backend.session
+    AIRFLOW_CONN_CRM_DB: postgresql://crm_user:crm_password@crm_db:5432/crm_db
+    _AIRFLOW_WWW_USER_USERNAME: admin
+    _AIRFLOW_WWW_USER_PASSWORD: admin
+    _AIRFLOW_WWW_USER_FIRSTNAME: Air
+    _AIRFLOW_WWW_USER_LASTNAME: Flow
+    _AIRFLOW_WWW_USER_ROLE: Admin
+    _AIRFLOW_WWW_USER_EMAIL: admin@example.com
+  volumes:
+    - ./airflow/dags:/opt/airflow/dags
+    - airflow_logs:/opt/airflow/logs
+    - ./airflow/plugins:/opt/airflow/plugins
+    - ./airflow/scripts:/opt/airflow/scripts:ro
+  user: "${AIRFLOW_UID:-50000}:0"
 
 services:
   redis:
@@ -36,17 +36,44 @@ services:
       context: ./bionicpro-auth
       dockerfile: Dockerfile
     environment:
-      - KEYCLOAK_SERVER=http://keycloak:8082
+      - KEYCLOAK_INTERNAL_URL=http://keycloak:8082
+      - KEYCLOAK_EXTERNAL_URL=http://localhost:8082
       - KEYCLOAK_REALM=reports-realm
       - KEYCLOAK_CLIENT_ID=reports-frontend
-      - KEYCLOAK_CLIENT_SECRET=ваш_секрет
+      - KEYCLOAK_CLIENT_SECRET=ce45dfd7f2e142eea98aa758a2f23649
       - REDIS_URL=redis://redis:6379
       - API_URL=http://backend:8000
+      - PROFILE_DB_DSN=postgresql://crm_user:crm_password@crm_db:5432/crm_db
     ports:
       - "5001:5001"
     depends_on:
       - redis
       - keycloak
+      - backend
+      - crm_db
+
+  backend:
+    container_name: bionicpro-backend
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    environment:
+      - KEYCLOAK_WELL_KNOWN_URL=http://keycloak:8082/realms/reports-realm/.well-known/openid-configuration
+      - MINIO_ENDPOINT=minio:9000
+      - MINIO_ACCESS_KEY=minio_user
+      - MINIO_SECRET_KEY=minio_password
+      - MINIO_BUCKET=bionicpro-reports
+      - CDN_BASE_URL=http://localhost:8081
+      - REPORT_TABLE=report_customer_telemetry_cdc
+    ports:
+      - "8000:8000"
+    depends_on:
+      olap_db:
+        condition: service_healthy
+      minio:
+        condition: service_started
+      keycloak-ready:
+        condition: service_completed_successfully
 
   keycloak_db:
     image: postgres:14
@@ -66,7 +93,10 @@ services:
       - "5433:5432"
   
   keycloak:
-    image: quay.io/keycloak/keycloak:24.0.3
+    build:
+      context: ./keycloak
+      dockerfile: Dockerfile
+    image: bionicpro-keycloak:24.0.3
     container_name: bionicpro-keycloak
     environment:
       KEYCLOAK_ADMIN: admin
@@ -104,6 +134,7 @@ services:
     ports:
       - "3000:3000"
     environment:
+      REACT_APP_AUTH_URL: http://localhost:5001
       REACT_APP_API_URL: http://localhost:8000
       REACT_APP_KEYCLOAK_URL: http://localhost:8082
       REACT_APP_KEYCLOAK_REALM: reports-realm
@@ -210,62 +241,73 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
-#
-#  airflow-init-perms:
-#    <<: *airflow-common
-#    container_name: bionicpro-airflow-init-perms
-#    user: "0:0"
-#    depends_on:
-#      airflow-db:
-#        condition: service_healthy
-#    entrypoint: ["/bin/bash", "-ec"]
-#    command: bash /opt/airflow/scripts/init-perms.sh
-#    restart: "no"
-#
-#  airflow-init:
-#    <<: *airflow-common
-#    container_name: bionicpro-airflow-init
-#    depends_on:
-#      airflow-db:
-#        condition: service_healthy
-#      airflow-init-perms:
-#        condition: service_completed_successfully
-#    environment:
-#      <<: *airflow-env
-#      _AIRFLOW_DB_MIGRATE: "true"
-#      _AIRFLOW_WWW_USER_CREATE: "true"
-#    command: version
-#    restart: "no"
-#
-#  airflow-webserver:
-#    <<: *airflow-common
-#    container_name: bionicpro-airflow-webserver
-#    depends_on:
-#      airflow-init:
-#        condition: service_completed_successfully
-#    command: webserver
-#    ports:
-#      - "8088:8080"
-#    restart: unless-stopped
-#    healthcheck:
-#      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=3).read()\""]
-#      interval: 10s
-#      timeout: 5s
-#      retries: 15
-#
-#  airflow-scheduler:
-#    <<: *airflow-common
-#    container_name: bionicpro-airflow-scheduler
-#    depends_on:
-#      airflow-init:
-#        condition: service_completed_successfully
-#    command: scheduler
-#    restart: unless-stopped
-#    healthcheck:
-#      test: ["CMD-SHELL", "airflow jobs check --job-type SchedulerJob --hostname \"$${HOSTNAME}\""]
-#      interval: 20s
-#      timeout: 10s
-#      retries: 10
+
+  airflow-init-perms:
+    <<: *airflow-common
+    container_name: bionicpro-airflow-init-perms
+    user: "0:0"
+    environment:
+      AIRFLOW_UID: ${AIRFLOW_UID:-50000}
+    depends_on:
+      airflow-db:
+        condition: service_healthy
+    entrypoint: ["/bin/bash", "-ec"]
+    command: bash /opt/airflow/scripts/init-perms.sh
+    restart: "no"
+
+  airflow-init:
+    <<: *airflow-common
+    container_name: bionicpro-airflow-init
+    depends_on:
+      airflow-db:
+        condition: service_healthy
+      airflow-init-perms:
+        condition: service_completed_successfully
+    environment:
+      <<: *airflow-env
+      _AIRFLOW_DB_MIGRATE: "true"
+      _AIRFLOW_WWW_USER_CREATE: "true"
+    command: version
+    restart: "no"
+
+  airflow-webserver:
+    <<: *airflow-common
+    container_name: bionicpro-airflow-webserver
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+      crm_db:
+        condition: service_healthy
+      olap_db:
+        condition: service_healthy
+    command: webserver
+    ports:
+      - "8088:8080"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=3).read()\""]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+
+  airflow-scheduler:
+    <<: *airflow-common
+    container_name: bionicpro-airflow-scheduler
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+      crm_db:
+        condition: service_healthy
+      olap_db:
+        condition: service_healthy
+    command: scheduler
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "airflow jobs check --job-type SchedulerJob --hostname \"$${HOSTNAME}\""]
+      interval: 20s
+      timeout: 10s
+      retries: 10
+
   zookeeper:
     image: confluentinc/cp-zookeeper:7.5.0
     container_name: bionicpro-zookeeper
@@ -311,6 +353,37 @@ services:
       - "8083:8083"
     volumes:
       - ./debezium:/debezium-config
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8083/connectors || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  connector-registrar:
+    image: curlimages/curl:8.11.1
+    container_name: bionicpro-connector-registrar
+    depends_on:
+      kafka-connect:
+        condition: service_healthy
+    volumes:
+      - ./debezium:/debezium-config:ro
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        echo "Registering Debezium connector...";
+        code=$$(curl -s -o /tmp/resp.json -w "%{http_code}" \
+          -X POST http://kafka-connect:8083/connectors \
+          -H "Content-Type: application/json" \
+          -d @/debezium-config/crm-connector.json);
+        echo "HTTP $$code";
+        cat /tmp/resp.json;
+        if [ "$$code" = "201" ] || [ "$$code" = "409" ]; then
+          echo "Connector registered (or already exists).";
+          exit 0;
+        fi;
+        echo "Failed to register connector"; exit 1;
+    restart: on-failure
 
 volumes:
   minio_storage: {}
@@ -319,5 +392,5 @@ volumes:
   clickhouse_data: {}
   clickhouse_logs: {}
   airflow_db_data: {}
-#  airflow_logs: {}
+  airflow_logs: {}
   nginx_cache:

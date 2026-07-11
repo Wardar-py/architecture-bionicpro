@@ -1,13 +1,14 @@
 import React, { useState, useEffect } from 'react';
 
+const AUTH_URL = process.env.REACT_APP_AUTH_URL || 'http://localhost:5001';
+
 const ReportPage: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [authenticated, setAuthenticated] = useState<boolean | null>(null);
 
   useEffect(() => {
-    // Проверяем, авторизован ли пользователь, обратившись к защищённому ресурсу
-    fetch('http://localhost:5000/api/reports', { credentials: 'include' })
+    fetch(`${AUTH_URL}/api/reports`, { credentials: 'include' })
       .then(res => {
         if (res.ok) setAuthenticated(true);
         else if (res.status === 401) setAuthenticated(false);
@@ -19,7 +20,7 @@ const ReportPage: React.FC = () => {
     try {
       setLoading(true);
       setError(null);
-      const response = await fetch('http://localhost:5000/api/reports', {
+      const response = await fetch(`${AUTH_URL}/api/reports`, {
         credentials: 'include'
       });
       if (!response.ok) {
@@ -47,7 +48,7 @@ const ReportPage: React.FC = () => {
     return (
       <div className="flex flex-col items-center justify-center min-h-screen bg-gray-100">
         <button
-          onClick={() => window.location.href = 'http://localhost:5001/auth/login'}
+          onClick={() => { window.location.href = `${AUTH_URL}/auth/login`; }}
           className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600"
         >
           Login
