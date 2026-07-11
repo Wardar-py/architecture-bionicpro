@@ -1500,7 +1500,7 @@
       "firstBrokerLoginFlowAlias": "first broker login",
       "config": {
         "clientId": "afc36497daab49a592baea664a93c781",
-        "clientSecret": "secret",
+        "clientSecret": "ce45dfd7f2e142eea98aa758a2f23649",
         "defaultScope": "login:email login:info",
         "guiOrder": "1",
         "syncMode": "IMPORT"

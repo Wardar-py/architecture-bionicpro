@@ -18,8 +18,8 @@ import os
 
 logger = logging.getLogger("bionicpro-auth")
 
-KEYCLOAK_INTERNAL_URL = os.getenv("KEYCLOAK_INTERNAL_URL", "http://keycloak:8082")  # для сервер-серверных запросов
-KEYCLOAK_EXTERNAL_URL = os.getenv("KEYCLOAK_EXTERNAL_URL", "http://localhost:8082")  # для редиректов пользователя
+KEYCLOAK_INTERNAL_URL = os.getenv("KEYCLOAK_INTERNAL_URL", "http://keycloak:8082")
+KEYCLOAK_EXTERNAL_URL = os.getenv("KEYCLOAK_EXTERNAL_URL", "http://localhost:8082")
 REALM = os.getenv("KEYCLOAK_REALM", "reports-realm")
 CLIENT_ID = os.getenv("KEYCLOAK_CLIENT_ID", "reports-frontend")
 CLIENT_SECRET = os.getenv("KEYCLOAK_CLIENT_SECRET", None)
@@ -37,7 +37,7 @@ db_pool: asyncpg.Pool | None = None
 
 
 async def fetch_userinfo(access_token: str) -> dict:
-    """Запрашивает у Keycloak (данные пришли из Яндекса) профиль пользователя."""
+    """Запрашивает у Keycloak профиль пользователя."""
     async with httpx.AsyncClient() as client:
         resp = await client.get(
             f"{KEYCLOAK_INTERNAL_URL}/realms/{REALM}/protocol/openid-connect/userinfo",
@@ -78,7 +78,6 @@ async def save_user_profile(userinfo: dict):
                 json.dumps(userinfo),
             )
     except Exception as exc:
-        # ошибка сохранения профиля не должна ломать вход пользователя
         logger.error("failed to save user profile: %s", exc)
 
 async def save_session(session_id: str, data: dict):
@@ -98,7 +97,6 @@ async def delete_session(session_id: str):
     await redis_client.delete(f"session:{session_id}")
 
 async def rotate_session(old_id: str, new_id: str):
-    # перепривязываем данные к новому ID, удаляем старый
     data = await get_session(old_id)
     if data:
         await save_session(new_id, data)
@@ -128,7 +126,6 @@ def get_authorization_url(redirect_uri: str, state: str):
         "code_challenge": challenge,
         "code_challenge_method": "S256"
     }
-    # ВАЖНО: используем внешний URL, чтобы браузер мог перейти
     url = f"{KEYCLOAK_EXTERNAL_URL}/realms/{REALM}/protocol/openid-connect/auth?" + urlencode(params)
     return url, verifier
 
@@ -169,7 +166,7 @@ app = FastAPI(title="bionicpro-auth")
 
 @app.on_event("startup")
 async def init_db_pool():
-    """Создаёт пул подключений к БД профилей (с несколькими попытками)."""
+    """Создаёт пул подключений к БД профилей."""
     global db_pool
     import asyncio
     for attempt in range(10):
@@ -194,11 +191,8 @@ async def close_db_pool():
 @app.get("/auth/login")
 async def login():
     state = secrets.token_urlsafe(32)
-    # в реальном приложении state нужно сохранять и проверять
     redirect_uri = "http://localhost:5001/auth/callback"
     url, verifier = get_authorization_url(redirect_uri, state)
-    # временно сохраняем verifier, например, в Redis с ключом state
-    # для простоты можно передать в куки (небезопасно), используем Redis
     await redis_client.setex(f"pkce:{state}", 300, verifier)
     response = RedirectResponse(url)
     return response
@@ -209,17 +203,14 @@ async def callback(request: Request):
     state = request.query_params.get("state")
     if not code:
         raise HTTPException(status_code=400, detail="Missing code")
-    # получаем code_verifier
     verifier = await redis_client.get(f"pkce:{state}")
     if not verifier:
         raise HTTPException(status_code=400, detail="Invalid state")
     await redis_client.delete(f"pkce:{state}")
     redirect_uri = "http://localhost:5001/auth/callback"
     tokens = await exchange_code_for_tokens(code, redirect_uri, verifier)
-    # запрашиваем профиль (данные пришли из Яндекса через брокеринг) и сохраняем в БД
     userinfo = await fetch_userinfo(tokens["access_token"])
     await save_user_profile(userinfo)
-    # создаём сессию
     session_id = str(uuid.uuid4())
     await save_session(session_id, {
         "access_token": tokens["access_token"],
@@ -232,7 +223,7 @@ async def callback(request: Request):
         key="bionicpro_session",
         value=session_id,
         httponly=True,
-        secure=True,  # для локальной разработки можно временно False
+        secure=True,
         samesite="lax",
         max_age=3600
     )
@@ -246,7 +237,7 @@ async def logout(request: Request, response: Response):
     response.delete_cookie("bionicpro_session")
     return {"message": "Logged out"}
 
-# Прокси для получения отчёта (защищённый ресурс)
+
 @app.get("/api/reports")
 async def get_reports(request: Request):
     session_id = request.cookies.get("bionicpro_session")
@@ -256,20 +247,17 @@ async def get_reports(request: Request):
     if not session_data:
         raise HTTPException(status_code=401)
     access_token = session_data["access_token"]
-    # попытка выполнить запрос с текущим access_token
     async with httpx.AsyncClient() as client:
         resp = await client.get(
             f"{API_URL}/reports",
             headers={"Authorization": f"Bearer {access_token}"}
         )
-        if resp.status_code == 401:  # токен истёк
-            # обновляем
+        if resp.status_code == 401:
             try:
                 new_tokens = await refresh_access_token(session_data["refresh_token"])
                 session_data["access_token"] = new_tokens["access_token"]
                 session_data["refresh_token"] = new_tokens["refresh_token"]
                 await save_session(session_id, session_data)
-                # повторяем запрос
                 resp = await client.get(
                     f"{API_URL}/reports",
                     headers={"Authorization": f"Bearer {new_tokens['access_token']}"}
@@ -278,7 +266,7 @@ async def get_reports(request: Request):
                 raise HTTPException(status_code=401)
         if resp.status_code != 200:
             raise HTTPException(status_code=resp.status_code, detail=resp.text)
-    # ротация сессии
+
     new_session_id = str(uuid.uuid4())
     await rotate_session(session_id, new_session_id)
     response = Response(content=resp.content, media_type=resp.headers.get("content-type"))

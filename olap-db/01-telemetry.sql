@@ -1,4 +1,4 @@
--- Сырые данные телеметрии протезов (источник для витрины отчётности).
+-- Сырые данные телеметрии протезов.
 CREATE TABLE IF NOT EXISTS raw_telemetry
 (
     timestamp        DateTime,

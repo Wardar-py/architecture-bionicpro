@@ -1,8 +1,3 @@
--- Витрина отчётности: объединяет телеметрию (raw_telemetry) и данные CRM
--- (dim_users, наполняемая через CDC) с помощью MaterializedView.
-
--- Предагрегированные метрики телеметрии по (date, user_id).
--- AggregatingMergeTree корректно объединяет частичные агрегаты при слияниях.
 CREATE TABLE IF NOT EXISTS report_telemetry_agg
 (
     date                 Date,
@@ -15,7 +10,6 @@ CREATE TABLE IF NOT EXISTS report_telemetry_agg
 ) ENGINE = AggregatingMergeTree()
 ORDER BY (date, user_id);
 
--- MaterializedView наполняет витрину на каждой вставке в raw_telemetry.
 CREATE MATERIALIZED VIEW IF NOT EXISTS report_telemetry_mv TO report_telemetry_agg
 AS SELECT
     toDate(timestamp) AS date,
@@ -28,8 +22,6 @@ AS SELECT
 FROM raw_telemetry
 GROUP BY date, user_id;
 
--- Итоговая витрина: агрегаты телеметрии + актуальные данные пользователя из CRM.
--- Дедупликация dim_users по последней версии (argMax по __source_ts_ms), исключаем удалённых.
 CREATE VIEW IF NOT EXISTS report_customer_telemetry_cdc AS
 SELECT
     a.date AS date,
@@ -56,8 +48,6 @@ INNER JOIN (
 ) AS u ON a.user_id = u.user_id
 GROUP BY a.date, a.user_id, u.full_name, u.email, u.prosthesis_model;
 
--- Демо-данные телеметрии. MaterializedView уже создан выше, поэтому
--- вставка автоматически наполнит report_telemetry_agg.
 INSERT INTO raw_telemetry (timestamp, user_id, response_time_ms, action_type, duration_ms)
 SELECT
     now() - INTERVAL number DAY - INTERVAL (number % 24) HOUR,

@@ -1,5 +1,3 @@
--- Профили пользователей, полученные через Identity Brokering (в т.ч. Яндекс ID).
--- Сервис bionicpro-auth запрашивает данные профиля и сохраняет их сюда.
 CREATE TABLE IF NOT EXISTS user_profiles (
     sub               VARCHAR(255) PRIMARY KEY,
     username          VARCHAR(255),

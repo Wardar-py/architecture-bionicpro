@@ -121,8 +121,6 @@ def aggregate_telemetry(**context):
     ORDER BY (date, user_id);
     """)
 
-    # Идемпотентность: удаляем прежние строки за обрабатываемый день,
-    # чтобы повторный запуск DAG не задваивал агрегаты в SummingMergeTree.
     client.execute(
         "ALTER TABLE report_customer_telemetry DELETE WHERE date = %(d)s",
         {'d': yesterday},
